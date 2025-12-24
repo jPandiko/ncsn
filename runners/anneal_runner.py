@@ -25,6 +25,10 @@ class AnnealRunner():
         self.args = args
         self.config = config
 
+    '''
+    Method to create the optimizer. We can choose between ADAM, RMSprop, SGD. The setup for the optimizers is 
+    stored in the self.config files.
+    '''
     def get_optimizer(self, parameters):
         if self.config.optim.optimizer == 'Adam':
             return optim.Adam(parameters, lr=self.config.optim.lr, weight_decay=self.config.optim.weight_decay,
@@ -36,11 +40,22 @@ class AnnealRunner():
         else:
             raise NotImplementedError('Optimizer {} not understood.'.format(self.config.optim.optimizer))
 
+
     def logit_transform(self, image, lam=1e-6):
         image = lam + (1 - 2 * lam) * image
         return torch.log(image) - torch.log1p(-image)
 
+
+    '''
+    Method to perform the training on the given for the annealed method.  
+    Steps:
+    1. Builds training and test image pipeline. Some imgs are fliped (if selected): -> doesn't harm the underlying data manifold but spreads the coverage
+    2. Load the image sets -> if needed do preperation for the sets to meet the models expectations
+    3. setup for the training
+    4. Train for all the epochs
+    '''
     def train(self):
+        # 1: transform the datasets into tensors
         if self.config.data.random_flip is False:
             tran_transform = test_transform = transforms.Compose([
                 transforms.Resize(self.config.data.image_size),
@@ -49,6 +64,7 @@ class AnnealRunner():
         else:
             tran_transform = transforms.Compose([
                 transforms.Resize(self.config.data.image_size),
+                # fliped horizontally with prob 0.5
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ToTensor()
             ])
@@ -57,6 +73,7 @@ class AnnealRunner():
                 transforms.ToTensor()
             ])
 
+        # 2: loading the datasets
         if self.config.data.dataset == 'CIFAR10':
             dataset = CIFAR10(os.path.join(self.args.run, 'datasets', 'cifar10'), train=True, download=True,
                               transform=tran_transform)
@@ -67,7 +84,9 @@ class AnnealRunner():
                             transform=tran_transform)
             test_dataset = MNIST(os.path.join(self.args.run, 'datasets', 'mnist_test'), train=False, download=True,
                                  transform=test_transform)
-
+        
+        # dataset CELEBA needs extra preparation to center the pictures
+        # horizontal flip should not change much since faces are symmatrical
         elif self.config.data.dataset == 'CELEBA':
             if self.config.data.random_flip:
                 dataset = CelebA(root=os.path.join(self.args.run, 'datasets', 'celeba'), split='train',
@@ -98,6 +117,8 @@ class AnnealRunner():
             test_dataset = SVHN(os.path.join(self.args.run, 'datasets', 'svhn_test'), split='test', download=True,
                                 transform=test_transform)
 
+        # 3: setup block for the training
+        # wraps dataset so we can iterate in batchesn -> size of batching from configs
         dataloader = DataLoader(dataset, batch_size=self.config.training.batch_size, shuffle=True, num_workers=4)
         test_loader = DataLoader(test_dataset, batch_size=self.config.training.batch_size, shuffle=True,
                                  num_workers=4, drop_last=True)
@@ -109,7 +130,9 @@ class AnnealRunner():
         if os.path.exists(tb_path):
             shutil.rmtree(tb_path)
 
+        # create a data log -> What is logged?
         tb_logger = tensorboardX.SummaryWriter(log_dir=tb_path)
+        # Move the score network to device
         score = CondRefineNetDilated(self.config).to(self.config.device)
 
         score = torch.nn.DataParallel(score)
@@ -122,21 +145,26 @@ class AnnealRunner():
             optimizer.load_state_dict(states[1])
 
         step = 0
-
+        
+        # create the sigams -> sigmas give the level of noise -> the setup is given from the configurations
         sigmas = torch.tensor(
             np.exp(np.linspace(np.log(self.config.model.sigma_begin), np.log(self.config.model.sigma_end),
                                self.config.model.num_classes))).float().to(self.config.device)
 
-
+        # 4: training period
         for epoch in range(self.config.training.n_epochs):
             for i, (X, y) in enumerate(dataloader):
                 step += 1
+                # enable training behavoir of the score-model
                 score.train()
+                # tranform the discrete data into a number continues set from [0,1]
                 X = X.to(self.config.device)
                 X = X / 256. * 255. + torch.rand_like(X) / 256.
+                # additionally logit tranformation
                 if self.config.data.logit_transform:
                     X = self.logit_transform(X)
 
+                # model learns on many noise levels at the same tiem
                 labels = torch.randint(0, len(sigmas), (X.shape[0],), device=X.device)
                 if self.config.training.algo == 'dsm':
                     loss = anneal_dsm_score_estimation(score, X, labels, sigmas, self.config.training.anneal_power)
@@ -144,16 +172,19 @@ class AnnealRunner():
                     loss = anneal_sliced_score_estimation_vr(score, X, labels, sigmas,
                                                              n_particles=self.config.training.n_particles)
 
+                # regular optimizer step
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
+                # logging current loss
                 tb_logger.add_scalar('loss', loss, global_step=step)
                 logging.info("step: {}, loss: {}".format(step, loss.item()))
 
                 if step >= self.config.training.n_iters:
                     return 0
 
+                # every 100 iterations go into evaluation mode
                 if step % 100 == 0:
                     score.eval()
                     try:
@@ -174,7 +205,8 @@ class AnnealRunner():
                                                                     self.config.training.anneal_power)
 
                     tb_logger.add_scalar('test_dsm_loss', test_dsm_loss, global_step=step)
-
+                
+                # checkpoining -> how does this work
                 if step % self.config.training.snapshot_freq == 0:
                     states = [
                         score.state_dict(),
@@ -305,6 +337,9 @@ class AnnealRunner():
 
             return images
 
+    '''
+    Used to sample data?. 
+    '''
     def test_inpainting(self):
         states = torch.load(os.path.join(self.args.log, 'checkpoint.pth'), map_location=self.config.device)
         score = CondRefineNetDilated(self.config).to(self.config.device)
