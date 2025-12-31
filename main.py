@@ -38,7 +38,7 @@ def parse_args_and_config():
         new_config = dict2namespace(config)
     else:
         with open(os.path.join(args.log, 'config.yml'), 'r') as f:
-            config = yaml.safe_load(f)
+            config = yaml.unsafe_load(f)
         new_config = config
 
     if not args.test:
@@ -106,6 +106,7 @@ def dict2namespace(config):
 
 def main():
     args, config = parse_args_and_config()
+
     logging.info("Writing log file to {}".format(args.log))
     logging.info("Exp instance id = {}".format(os.getpid()))
     logging.info("Exp comment = {}".format(args.comment))
