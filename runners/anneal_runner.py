@@ -206,7 +206,7 @@ class AnnealRunner():
 
                     tb_logger.add_scalar('test_dsm_loss', test_dsm_loss, global_step=step)
                 
-                # checkpoining -> how does this work
+                # checkpoining -> safe the weights of the network every so and so steps
                 if step % self.config.training.snapshot_freq == 0:
                     states = [
                         score.state_dict(),
@@ -310,6 +310,7 @@ class AnnealRunner():
 
         imgs[0].save(os.path.join(self.args.image_folder, "movie.gif"), save_all=True, append_images=imgs[1:], duration=1, loop=0)
 
+    # used for sampling
     def anneal_Langevin_dynamics_inpainting(self, x_mod, refer_image, scorenet, sigmas, n_steps_each=100,
                                             step_lr=0.000008):
         images = []
