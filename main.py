@@ -24,15 +24,37 @@ def parse_args_and_config():
     parser.add_argument('--test', action='store_true', help='Whether to test the model')
     parser.add_argument('--resume_training', action='store_true', help='Whether to resume training')
     parser.add_argument('-o', '--image_folder', type=str, default='images', help="The directory of image outputs")
+    # NEW: pipeline mode (keeps --test working too)
+    parser.add_argument(
+        '--mode',
+        type=str,
+        default=None,
+        choices=['train', 'test', 'sample', 'inpaint'],
+        help='Pipeline mode. If omitted: uses --test to select train/test.'
+    )
+
+    # NEW: sampling controls (used when --mode sample)
+    parser.add_argument('--num_samples', type=int, default=10000, help='Number of images to sample')
+    parser.add_argument('--sample_batch_size', type=int, default=64, help='Batch size for sampling')
+    parser.add_argument('--n_steps_each', type=int, default=100, help='Langevin steps per sigma level')
+    parser.add_argument('--step_lr', type=float, default=2e-5, help='Base step size for annealed Langevin dynamics')
+
 
     args = parser.parse_args()
+    
+    # If --mode not provided, fall back to old behavior via --test
+    if args.mode is None:
+        args.mode = 'test' if args.test else 'train'
+    
+    
     run_id = str(os.getpid())
     run_time = time.strftime('%Y-%b-%d-%H-%M-%S')
     # args.doc = '_'.join([args.doc, run_id, run_time])
     args.log = os.path.join(args.run, 'logs', args.doc)
 
     # parse config file
-    if not args.test:
+    is_eval = args.mode in ["test", "sample", "inpaint"]
+    if not is_eval:
         with open(os.path.join('configs', args.config), 'r') as f:
             config = yaml.safe_load(f)
         new_config = dict2namespace(config)
@@ -41,7 +63,7 @@ def parse_args_and_config():
             config = yaml.unsafe_load(f)
         new_config = config
 
-    if not args.test:
+    if not is_eval:
         if not args.resume_training:
             if os.path.exists(args.log):
                 shutil.rmtree(args.log)
@@ -117,10 +139,18 @@ def main():
 
     try:
         runner = eval(args.runner)(args, config)
-        if not args.test:
+
+        if args.mode == 'train':
             runner.train()
-        else:
+        elif args.mode == 'test':
             runner.test()
+        elif args.mode == 'sample':
+            runner.sample_pipeline()     # NEW
+        elif args.mode == 'inpaint':
+            runner.test_inpainting()
+        else:
+            raise ValueError(f"Unknown mode: {args.mode}")
+
     except:
         logging.error(traceback.format_exc())
 
