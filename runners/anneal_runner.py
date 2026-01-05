@@ -428,3 +428,70 @@ class AnnealRunner():
 
 
         imgs[0].save(os.path.join(self.args.image_folder, "movie.gif"), save_all=True, append_images=imgs[1:], duration=1, loop=0)
+
+  
+    """
+    Used to start the sampling process needed for calculating the scores.
+    """
+    def start_sampling_images(self):
+        states = torch.load(os.path.join(self.args.log, 'checkpoint.pth'), map_location=self.config.device)
+        score = CondRefineNetDilated(self.config).to(self.config.device)
+        score = torch.nn.DataParallel(score)
+        score.load_state_dict(states[0])
+
+        self.sample_images(score,num_samples=10000,batch_size=64,n_steps_each=100,step_lr=2e-5,)
+
+
+    """
+    Generate samples using annealed Langevin dynamics and save them as individual PNGs.
+    Suitable for FID / Inception Score evaluation.
+    """
+    def sample_images(self,scorenet,*,num_samples: int,batch_size: int = 64,n_steps_each: int = 100,step_lr: float = 2e-5,):
+      scorenet.eval()
+      os.makedirs(self.args.image_folder, exist_ok=True)
+
+      # --- build sigma schedule (torch, on device) ---
+      sigmas = torch.tensor(np.exp(np.linspace(
+            np.log(self.config.model.sigma_begin),
+            np.log(self.config.model.sigma_end),
+            self.config.model.num_classes,
+        )),
+        dtype=torch.float32,
+        device=self.config.device)
+
+      channels = self.config.data.channels
+      size = self.config.data.image_size
+      device = self.config.device
+
+      global_idx = 0
+
+      with torch.no_grad():
+          while global_idx < num_samples:
+            b = min(batch_size, num_samples - global_idx)
+
+            # --- initialize from uniform noise ---
+            x = torch.rand(b, channels, size, size, device=device)
+
+            # --- annealed Langevin dynamics ---
+            for c, sigma in enumerate(sigmas):
+                labels = torch.full((b,), c, device=device, dtype=torch.long)
+                step_size = step_lr * (sigma / sigmas[-1]) ** 2
+
+                for _ in range(n_steps_each):
+                    noise = torch.randn_like(x) * torch.sqrt(step_size * 2)
+                    grad = scorenet(x, labels)
+                    x = x + step_size * grad + noise
+
+            # --- invert logit transform if used during training ---
+            if self.config.data.logit_transform:
+                x = torch.sigmoid(x)
+
+            x = x.clamp(0.0, 1.0)
+
+            # --- save individual images ---
+            for j in range(b):
+                save_image(
+                    x[j],
+                    os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png")
+                )
+                global_idx += 1
