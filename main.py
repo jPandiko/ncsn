@@ -145,7 +145,7 @@ def main():
         elif args.mode == 'test':
             runner.test()
         elif args.mode == 'sample':
-            runner.sample_pipeline()     # NEW
+            runner.start_sampling_images()     # NEW
         elif args.mode == 'inpaint':
             runner.test_inpainting()
         else:
