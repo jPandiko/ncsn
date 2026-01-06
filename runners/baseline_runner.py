@@ -269,3 +269,80 @@ class BaselineRunner():
                     sample = torch.sigmoid(sample)
 
                 torch.save(sample, os.path.join(self.args.image_folder, 'samples_{}.pth'.format(i)))
+
+    """
+    Vanilla Langevin dynamics.
+    Returns ONLY the final samples.
+    """
+    def Langevin_dynamics_final(self,x,scorenet,*,n_steps=2000,step_lr=2e-5,):
+      with torch.no_grad():
+        for _ in range(n_steps):
+            noise = torch.randn_like(x) * torch.sqrt(torch.tensor(2.0 * step_lr, device=x.device))
+            grad = scorenet(x)
+            x = x + step_lr * grad + noise
+      return x
+
+
+    from torchvision.utils import save_image
+
+
+
+    def start_sampling_images(self):
+      """
+      FINAL sampling pipeline for the baseline model.
+      Saves ONLY final samples as individual 32x32 RGB PNG files.
+      Suitable for FID / Inception Score.
+      """
+      # load the model
+      states = torch.load(os.path.join(self.args.log, "checkpoint.pth"),map_location=self.config.device)
+
+      score = RefineNetDilated(self.config).to(self.config.device)
+      score = torch.nn.DataParallel(score)
+      score.load_state_dict(states[0])
+      score.eval()
+
+      # output directory
+      os.makedirs(self.args.image_folder, exist_ok=True)
+
+      # sampling parameters
+      num_samples = getattr(self.args, "num_samples", 10000)
+      batch_size  = getattr(self.args, "sample_batch_size", 64)
+      n_steps     = getattr(self.args, "n_steps_each", 2000)
+      step_lr     = getattr(self.args, "step_lr", 2e-5)
+
+      channels = self.config.data.channels        # = 3
+      size     = self.config.data.image_size      # = 32
+      device   = self.config.device
+
+      # sampling loop
+      global_idx = 0
+      pbar = tqdm.tqdm(total=num_samples, desc="Baseline sampling (final samples only)")
+
+      while global_idx < num_samples:
+        b = min(batch_size, num_samples - global_idx)
+
+        # Initialize from uniform noise
+        x = torch.rand(b, channels, size, size, device=device)
+
+        # Run Langevin dynamics (FINAL samples only)
+        x = self.Langevin_dynamics_final(x,score,n_steps=n_steps,step_lr=step_lr,)
+
+        # Undo logit transform if used during training
+        if self.config.data.logit_transform:
+            x = torch.sigmoid(x)
+
+        x = x.clamp(0.0, 1.0)
+
+        # 5) Save individual PNGs (metric-ready)
+        for j in range(b):
+            save_image(
+                x[j],
+                os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png")
+            )
+            global_idx += 1
+            pbar.update(1)
+
+        pbar.close()
+
+    
+
