@@ -470,18 +470,22 @@ class AnnealRunner():
 
       with torch.no_grad():
           while global_idx < num_samples:
-            print("current idx :", global_idx)
+            print("[+] current idx :", global_idx)
             b = min(batch_size, num_samples - global_idx)
 
             # --- initialize from uniform noise ---
             x = torch.rand(b, channels, size, size, device=device)
 
+            print("[+] init randomized")
+
             # --- annealed Langevin dynamics ---
             for c, sigma in enumerate(sigmas):
+                print("[+] first loop")
                 labels = torch.full((b,), c, device=device, dtype=torch.long)
                 step_size = step_lr * (sigma / sigmas[-1]) ** 2
 
                 for _ in range(n_steps_each):
+                    print(["[+] second loop"])
                     noise = torch.randn_like(x) * torch.sqrt(step_size * 2)
                     grad = scorenet(x, labels)
                     x = x + step_size * grad + noise
