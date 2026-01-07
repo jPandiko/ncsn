@@ -447,6 +447,9 @@ class AnnealRunner():
     Suitable for FID / Inception Score evaluation.
     """
     def sample_images(self,scorenet,*,num_samples: int,batch_size: int = 64,n_steps_each: int = 100,step_lr: float = 2e-5,):
+      
+      print("--- start sampling ---")
+      
       scorenet.eval()
       os.makedirs(self.args.image_folder, exist_ok=True)
 
@@ -467,6 +470,7 @@ class AnnealRunner():
 
       with torch.no_grad():
           while global_idx < num_samples:
+            print("current idx :", global_idx)
             b = min(batch_size, num_samples - global_idx)
 
             # --- initialize from uniform noise ---
@@ -490,8 +494,5 @@ class AnnealRunner():
 
             # --- save individual images ---
             for j in range(b):
-                save_image(
-                    x[j],
-                    os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png")
-                )
+                save_image(x[j],os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png"))
                 global_idx += 1

@@ -10,6 +10,7 @@ import tensorboardX
 import torch.optim as optim
 from torchvision.datasets import MNIST, CIFAR10, FashionMNIST
 import torchvision.transforms as transforms
+from torchvision.utils import save_image
 from torch.utils.data import DataLoader, Subset
 from datasets.celeba import CelebA
 from models.refinenet_dilated_baseline import RefineNetDilated
