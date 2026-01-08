@@ -15,36 +15,94 @@ from torch.utils.data import DataLoader, Subset
 from datasets.celeba import CelebA
 from models.cond_refinenet_dilated import CondRefineNetDilated
 from torchvision.utils import save_image, make_grid
+from argparse import Namespace
 from PIL import Image
 
 
 # ------ setup parameters here ------------
 
 # training
+resume_training = False # If you want to resume training, you need to give a checkpoint
 random_flip = False
-image_size = (32,32)
-dataset = "MNIST"
+image_size = 32          # keep as int if you use image_size ** 2 later
+dataset_name = "MNIST"
 batchsize = 128
+n_epochs = 5000
+n_iters = 2001
+ngpu = 1
+snapshot_freq = 2000
+algo = "dsm"
+anneal_power = 2.0
 
-# optimzers
-optimizer_select = "Adam"  # Adam, RMSProp, SGD
-learning_rate = 10e-5
-weight_decay = 0.000
+# optimizers
+optimizer_select = "Adam"   # Adam, RMSProp, SGD
+learning_rate = 1e-4        # 10e-5 == 1e-4
+weight_decay = 0.0
 beta1 = 0.9
 amsgrad = False
+
+# annealing noise
+sigma_begin_para = 0.1
+sigma_end_para = 1
+num_classes_para = 10
+batch_norm_para = False
+ngf_para = 64
 
 # file storaging
 path = "mnist_run"
 
-
 # data
 channels = 1
+logit_transform = False
+
+
+from argparse import Namespace
+import torch
+
+def build_config():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    return Namespace(
+        training=Namespace(
+            batch_size=batchsize,
+            n_epochs=n_epochs,
+            n_iters=n_iters,
+            ngpu=ngpu,
+            snapshot_freq=snapshot_freq,
+            algo=algo,
+            anneal_power=anneal_power,
+        ),
+        data=Namespace(
+            dataset=dataset_name,
+            image_size=image_size,
+            channels=channels,
+            logit_transform=logit_transform,
+            random_flip=random_flip,
+        ),
+        model=Namespace(
+            sigma_begin=sigma_begin_para, # setup the noise functions
+            sigma_end=sigma_end_para,
+            num_classes=num_classes_para,
+            batch_norm=batch_norm_para,
+            ngf=ngf_para,
+        ),
+        optim=Namespace(
+            weight_decay=weight_decay,
+            optimizer=optimizer_select,
+            lr=learning_rate,
+            beta1=beta1,
+            amsgrad=amsgrad,
+        ),
+        device=device,
+    )
+
+
 
 class Runner():
   
-  def __init__(self):
+  def __init__(self, config):
     # here configs
-    1+1
+    self.config = config
   
   '''
   Method to create the optimizer. We can choose between ADAM, RMSprop, SGD. The setup for the optimizers is 
@@ -96,7 +154,7 @@ class Runner():
         test_iter = iter(test_loader)
         input_dim = image_size ** 2 * channels
 
-        tb_path = os.path.join(self.args.run, 'tensorboard', self.args.doc)
+        tb_path = os.path.join(path, 'tensorboard')
         if os.path.exists(tb_path):
             shutil.rmtree(tb_path)
 
@@ -109,7 +167,7 @@ class Runner():
 
         optimizer = self.get_optimizer(score.parameters())
 
-        if self.args.resume_training:
+        if resume_training:
             states = torch.load(os.path.join(self.args.log, 'checkpoint.pth'))
             score.load_state_dict(states[0])
             optimizer.load_state_dict(states[1])
@@ -118,11 +176,11 @@ class Runner():
         
         # create the sigams -> sigmas give the level of noise -> the setup is given from the configurations
         sigmas = torch.tensor(
-            np.exp(np.linspace(np.log(self.config.model.sigma_begin), np.log(self.config.model.sigma_end),
-                               self.config.model.num_classes))).float().to(self.config.device)
+            np.exp(np.linspace(np.log(sigma_begin_para), np.log(sigma_end_para),
+                               num_classes_para))).float().to(self.config.device)
 
         # 4: training period
-        for epoch in range(self.config.training.n_epochs):
+        for epoch in range(n_epochs):
             for i, (X, y) in enumerate(dataloader):
                 step += 1
                 # enable training behavoir of the score-model
@@ -137,10 +195,10 @@ class Runner():
                 # model learns on many noise levels at the same tiem
                 labels = torch.randint(0, len(sigmas), (X.shape[0],), device=X.device)
                 if self.config.training.algo == 'dsm':
-                    loss = anneal_dsm_score_estimation(score, X, labels, sigmas, self.config.training.anneal_power)
-                elif self.config.training.algo == 'ssm':
-                    loss = anneal_sliced_score_estimation_vr(score, X, labels, sigmas,
-                                                             n_particles=self.config.training.n_particles)
+                    loss = anneal_dsm_score_estimation(score, X, labels, sigmas, anneal_power)
+                #elif self.config.training.algo == 'ssm':
+                #    loss = anneal_sliced_score_estimation_vr(score, X, labels, sigmas,
+                #                                            n_particles=self.config.training.n_particles)
 
                 # regular optimizer step
                 optimizer.zero_grad()
@@ -171,13 +229,12 @@ class Runner():
                     test_labels = torch.randint(0, len(sigmas), (test_X.shape[0],), device=test_X.device)
 
                     with torch.no_grad():
-                        test_dsm_loss = anneal_dsm_score_estimation(score, test_X, test_labels, sigmas,
-                                                                    self.config.training.anneal_power)
+                        test_dsm_loss = anneal_dsm_score_estimation(score, test_X, test_labels, sigmas,anneal_power)
 
                     tb_logger.add_scalar('test_dsm_loss', test_dsm_loss, global_step=step)
                 
                 # checkpoining -> safe the weights of the network every so and so steps
-                if step % self.config.training.snapshot_freq == 0:
+                if step % snapshot_freq == 0:
                     states = [
                         score.state_dict(),
                         optimizer.state_dict(),
