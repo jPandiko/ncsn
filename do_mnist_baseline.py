@@ -14,7 +14,7 @@ from torchvision.datasets import MNIST, CIFAR10, SVHN
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 from datasets.celeba import CelebA
-from models.cond_refinenet_dilated import RefineNetDilated
+from models.refinenet_dilated_baseline import RefineNetDilated
 from torchvision.utils import save_image, make_grid
 from argparse import Namespace
 from PIL import Image
@@ -57,6 +57,7 @@ path = "mnist_run_baseline"
 # data
 channels = 1
 logit_transform = False
+
 
 # sampling
 num_samples = 100
@@ -246,8 +247,8 @@ class Runner():
                         score.state_dict(),
                         optimizer.state_dict(),
                     ]
-                    torch.save(states, os.path.join(self.args.log, 'checkpoint_{}.pth'.format(step)))
-                    torch.save(states, os.path.join(self.args.log, 'checkpoint.pth'))
+                    torch.save(states, os.path.join(path, "log", 'checkpoint_{}.pth'.format(step)))
+                    torch.save(states, os.path.join(path, "log", 'checkpoint.pth'))
 
   
 
@@ -256,23 +257,58 @@ class Runner():
   Used to start the sampling process needed for calculating the scores.
   """
   def start_sampling_images(self):
-        states = torch.load(os.path.join(path, "log", 'checkpoint.pth'), map_location=self.config.device)
-        score = RefineNetDilated(self.config).to(self.config.device)
-        score = torch.nn.DataParallel(score)
-        score.load_state_dict(states[0])
+      # load the model
+      states = torch.load(os.path.join(path, "log", "checkpoint.pth"),map_location=self.config.device)
 
-        print("[+] sampling setup prepared successfuly")
+      score = RefineNetDilated(self.config).to(self.config.device)
+      score = torch.nn.DataParallel(score)
+      score.load_state_dict(states[0])
+      score.eval()
 
-        self.sample_images(score,num_samples=num_samples,batch_size=batch_size,n_steps_each = n_steps_each,step_lr=step_lr,)
+      # output directory
+      os.makedirs(os.path.join(path, "images"), exist_ok=True)
 
+      device   = self.config.device
+
+      # sampling loop
+      global_idx = 0
+      pbar = tqdm.tqdm(total=num_samples, desc="Baseline sampling (final samples only)")
+
+      while global_idx < num_samples:
+        b = min(batch_size, num_samples - global_idx)
+
+        # Initialize from uniform noise
+        x = torch.rand(b, channels, image_size, image_size, device=device)
+
+        # Run Langevin dynamics (FINAL samples only)
+        x = self.langevin_dynamics_final(x,score,n_steps=n_steps_each,step_lr=step_lr,)
+
+        # Undo logit transform if used during training
+        if logit_transform:
+            x = torch.sigmoid(x)
+
+        x = x.clamp(0.0, 1.0)
+
+        # 5) Save individual PNGs (metric-ready)
+        for j in range(b):
+            save_image(
+                x[j],
+                os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png")
+            )
+            global_idx += 1
+            pbar.update(1)
+
+        pbar.close()
     
-  """
-  Generate samples using annealed Langevin dynamics and save them as individual PNGs.
-  Suitable for FID / Inception Score evaluation.
-  """
-  def sample_images(self,scorenet,*,num_samples: int,batch_size: int = 64,n_steps_each: int = 100,step_lr: float = 2e-5,):
-      return 0
-
+  def langevin_dynamics_final(self,x,scorenet,*,n_steps=2000,step_lr=2e-5,):
+      with torch.no_grad():
+        for _ in range(n_steps):
+            noise = torch.randn_like(x) * torch.sqrt(torch.tensor(2.0 * step_lr, device=x.device))
+            grad = scorenet(x)
+            x = x + step_lr * grad + noise
+      return x
+    
+  
 
 if __name__ == "__main__":
     setup_logger() # to enable logging
