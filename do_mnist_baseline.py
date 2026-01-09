@@ -265,15 +265,20 @@ class Runner():
       score.load_state_dict(states[0])
       score.eval()
 
+      print("[+] model loaded successfully")
+
       # output directory
       os.makedirs(os.path.join(path, "images"), exist_ok=True)
 
       device   = self.config.device
+      print("[+] directory set up")
+
 
       # sampling loop
       global_idx = 0
       pbar = tqdm.tqdm(total=num_samples, desc="Baseline sampling (final samples only)")
 
+      print("[+] start sampling loop")
       while global_idx < num_samples:
         b = min(batch_size, num_samples - global_idx)
 
@@ -293,7 +298,7 @@ class Runner():
         for j in range(b):
             save_image(
                 x[j],
-                os.path.join(self.args.image_folder, f"sample_{global_idx:06d}.png")
+                os.path.join(os.path.join(path, "images"), f"sample_{global_idx:06d}.png")
             )
             global_idx += 1
             pbar.update(1)
