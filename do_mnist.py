@@ -30,10 +30,10 @@ random_flip = False
 image_size = 32          
 dataset_name = "MNIST"
 batchsize = 128
-n_epochs = 500
-n_iters = 201
+n_epochs = 5000
+n_iters = 2001
 ngpu = 1
-snapshot_freq = 200
+snapshot_freq = 2000
 algo = "dsm"
 anneal_power = 2.0
 
@@ -351,4 +351,4 @@ class Runner():
 if __name__ == "__main__":
     setup_logger() # to enable logging
     runner = Runner(build_config())
-    runner.start_sampling_images()
+    runner.train()
