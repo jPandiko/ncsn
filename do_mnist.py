@@ -4,6 +4,7 @@ from losses.dsm import anneal_dsm_score_estimation
 from losses.sliced_sm import anneal_sliced_score_estimation_vr
 import torch.nn.functional as F
 import logging
+import sys
 import torch
 import os
 import shutil
@@ -17,6 +18,8 @@ from models.cond_refinenet_dilated import CondRefineNetDilated
 from torchvision.utils import save_image, make_grid
 from argparse import Namespace
 from PIL import Image
+from argparse import Namespace
+
 
 
 # ------ setup parameters here ------------
@@ -24,13 +27,13 @@ from PIL import Image
 # training
 resume_training = False # If you want to resume training, you need to give a checkpoint
 random_flip = False
-image_size = 32          # keep as int if you use image_size ** 2 later
+image_size = 32          
 dataset_name = "MNIST"
 batchsize = 128
-n_epochs = 5000
-n_iters = 2001
+n_epochs = 500
+n_iters = 201
 ngpu = 1
-snapshot_freq = 2000
+snapshot_freq = 200
 algo = "dsm"
 anneal_power = 2.0
 
@@ -56,8 +59,13 @@ channels = 1
 logit_transform = False
 
 
-from argparse import Namespace
-import torch
+# setup the logger
+def setup_logger():
+  logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,)
 
 def build_config():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -119,7 +127,20 @@ class Runner():
       else:
           raise NotImplementedError('Optimizer {} not understood.'.format(self.config.optim.optimizer))
 
+  def logit_transform(self, image, lam=1e-6):
+        image = lam + (1 - 2 * lam) * image
+        return torch.log(image) - torch.log1p(-image)
+
+  """
+  Method to train the the score network. Parameters are set in the beginning of the file. 
+  See that the configs of the run need to be saved manually if the parameters where to be 
+  changed between a test run and a training run.
+  """
   def train(self):
+        
+        # check wether folder is already existing
+        os.makedirs(os.path.join(path, "log"), exist_ok=True)
+
         # 1: transform the datasets into tensors
         if random_flip is False:
             tran_transform = test_transform = transforms.Compose([
@@ -139,9 +160,9 @@ class Runner():
             ])
 
         # 2: loading the datasets
-        dataset = MNIST(os.path.join(self.args.run, 'datasets', 'mnist'), train=True, download=True,
+        dataset = MNIST(os.path.join(path, 'datasets', 'mnist'), train=True, download=True,
                             transform=tran_transform)
-        test_dataset = MNIST(os.path.join(self.args.run, 'datasets', 'mnist_test'), train=False, download=True,
+        test_dataset = MNIST(os.path.join(path, 'datasets', 'mnist_test'), train=False, download=True,
                                  transform=test_transform)
 
 
@@ -151,15 +172,20 @@ class Runner():
         test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=True,
                                  num_workers=4, drop_last=True)
 
+        print("[+] data loaded", flush = True)
         test_iter = iter(test_loader)
         input_dim = image_size ** 2 * channels
 
+        print("[+] tensorboard storage constructed", flush = True)
         tb_path = os.path.join(path, 'tensorboard')
         if os.path.exists(tb_path):
             shutil.rmtree(tb_path)
-
-        # create a data log -> What is logged?
+        
+        print("[+] build tensor board", flush = True)
+        # create a data log 
         tb_logger = tensorboardX.SummaryWriter(log_dir=tb_path)
+        
+        print("[+] build score network", flush = True)
         # Move the score network to device
         score = CondRefineNetDilated(self.config).to(self.config.device)
 
@@ -174,11 +200,13 @@ class Runner():
 
         step = 0
         
+        print("[+] build sigmas", flush=True)
         # create the sigams -> sigmas give the level of noise -> the setup is given from the configurations
         sigmas = torch.tensor(
             np.exp(np.linspace(np.log(sigma_begin_para), np.log(sigma_end_para),
                                num_classes_para))).float().to(self.config.device)
 
+        print("[+] start training")
         # 4: training period
         for epoch in range(n_epochs):
             for i, (X, y) in enumerate(dataloader):
@@ -189,12 +217,12 @@ class Runner():
                 X = X.to(self.config.device)
                 X = X / 256. * 255. + torch.rand_like(X) / 256.
                 # additionally logit tranformation
-                if self.config.data.logit_transform:
+                if logit_transform:
                     X = self.logit_transform(X)
 
                 # model learns on many noise levels at the same tiem
                 labels = torch.randint(0, len(sigmas), (X.shape[0],), device=X.device)
-                if self.config.training.algo == 'dsm':
+                if algo == 'dsm':
                     loss = anneal_dsm_score_estimation(score, X, labels, sigmas, anneal_power)
                 #elif self.config.training.algo == 'ssm':
                 #    loss = anneal_sliced_score_estimation_vr(score, X, labels, sigmas,
@@ -235,9 +263,30 @@ class Runner():
                 
                 # checkpoining -> safe the weights of the network every so and so steps
                 if step % snapshot_freq == 0:
+                    print("[+] save ceckpoint")
                     states = [
                         score.state_dict(),
                         optimizer.state_dict(),
                     ]
-                    torch.save(states, os.path.join(self.args.log, 'checkpoint_{}.pth'.format(step)))
-                    torch.save(states, os.path.join(self.args.log, 'checkpoint.pth'))
+                    torch.save(states, os.path.join(path, "log", 'checkpoint_{}.pth'.format(step)))
+                    torch.save(states, os.path.join(path, "log", 'checkpoint.pth'))
+  """
+  Used to start the sampling process needed for calculating the scores.
+  """
+  def start_sampling_images(self):
+        states = torch.load(os.path.join(path, "log", 'checkpoint.pth'), map_location=self.config.device)
+        score = CondRefineNetDilated(self.config).to(self.config.device)
+        score = torch.nn.DataParallel(score)
+        score.load_state_dict(states[0])
+
+        print("[+] sampling setup prepared successfuly")
+
+        #self.sample_images(score,num_samples=10000,batch_size=64,n_steps_each=100,step_lr=2e-5,)
+
+    
+
+
+if __name__ == "__main__":
+    setup_logger() # to enable logging
+    runner = Runner(build_config())
+    runner.start_sampling_images()
