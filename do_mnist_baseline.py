@@ -1,6 +1,6 @@
 import numpy as np
 import tqdm
-from losses.dsm import anneal_dsm_score_estimation
+from losses.dsm import dsm_score_estimation
 from losses.sliced_sm import anneal_sliced_score_estimation_vr
 import torch.nn.functional as F
 import logging
@@ -14,7 +14,7 @@ from torchvision.datasets import MNIST, CIFAR10, SVHN
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 from datasets.celeba import CelebA
-from models.cond_refinenet_dilated import CondRefineNetDilated
+from models.cond_refinenet_dilated import RefineNetDilated
 from torchvision.utils import save_image, make_grid
 from argparse import Namespace
 from PIL import Image
@@ -25,7 +25,7 @@ from argparse import Namespace
 # ------ setup parameters here ------------
 
 # training
-resume_training = False # !Not Implemented yet! If you want to resume training, you need to give a checkpoint
+resume_training = False # !Not Implemented yet ! If you want to resume training, you need to give a checkpoint
 random_flip = False
 image_size = 32          
 dataset_name = "MNIST"
@@ -52,7 +52,7 @@ batch_norm_para = False
 ngf_para = 64
 
 # file storaging
-path = "mnist_run"
+path = "mnist_run_baseline"
 
 # data
 channels = 1
@@ -135,6 +135,7 @@ class Runner():
       else:
           raise NotImplementedError('Optimizer {} not understood.'.format(optimizer_select))
 
+    
   def logit_transform(self, image, lam=1e-6):
         image = lam + (1 - 2 * lam) * image
         return torch.log(image) - torch.log1p(-image)
@@ -145,11 +146,10 @@ class Runner():
   changed between a test run and a training run.
   """
   def train(self):
-        
-        # check wether folder is already existing
+
+        # check wether the folder is already existing
         os.makedirs(os.path.join(path, "log"), exist_ok=True)
 
-        # 1: transform the datasets into tensors
         if random_flip is False:
             tran_transform = test_transform = transforms.Compose([
                 transforms.Resize(image_size),
@@ -158,7 +158,6 @@ class Runner():
         else:
             tran_transform = transforms.Compose([
                 transforms.Resize(image_size),
-                # fliped horizontally with prob 0.5
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.ToTensor()
             ])
@@ -167,89 +166,63 @@ class Runner():
                 transforms.ToTensor()
             ])
 
-        # 2: loading the datasets
         dataset = MNIST(os.path.join(path, 'datasets', 'mnist'), train=True, download=True,
                             transform=tran_transform)
         test_dataset = MNIST(os.path.join(path, 'datasets', 'mnist_test'), train=False, download=True,
                                  transform=test_transform)
 
-
-        # 3: setup block for the training
-        # wraps dataset so we can iterate in batchesn -> size of batching from configs
-        dataloader = DataLoader(dataset, batch_size=batchsize, shuffle=True, num_workers=4)
-        test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=True,
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True,
                                  num_workers=4, drop_last=True)
 
-        print("[+] data loaded", flush = True)
+        print("[+] data loaded", flush=True)
         test_iter = iter(test_loader)
         input_dim = image_size ** 2 * channels
 
-        print("[+] tensorboard storage constructed", flush = True)
+        print("[+] tensorboard storage constructed", flush=True)
         tb_path = os.path.join(path, 'tensorboard')
         if os.path.exists(tb_path):
             shutil.rmtree(tb_path)
-        
-        print("[+] build tensor board", flush = True)
-        # create a data log 
-        tb_logger = tensorboardX.SummaryWriter(log_dir=tb_path)
-        
-        print("[+] build score network", flush = True)
-        # Move the score network to device
-        score = CondRefineNetDilated(self.config).to(self.config.device)
 
+        print("[+] build tensor board")
+        tb_logger = tensorboardX.SummaryWriter(log_dir=tb_path)
+
+        print("[+] build score network", flush=True)
+        score = RefineNetDilated(self.config).to(self.config.device)
         score = torch.nn.DataParallel(score)
 
         optimizer = self.get_optimizer(score.parameters())
 
-        # WARNING: dont use this, needs to be implemented yet
+        # WARNING: dont use this, needs to implemented yet
         if resume_training:
             states = torch.load(os.path.join(self.args.log, 'checkpoint.pth'))
             score.load_state_dict(states[0])
             optimizer.load_state_dict(states[1])
 
         step = 0
-        
-        print("[+] build sigmas", flush=True)
-        # create the sigams -> sigmas give the level of noise -> the setup is given from the configurations
-        sigmas = torch.tensor(
-            np.exp(np.linspace(np.log(sigma_begin_para), np.log(sigma_end_para),
-                               num_classes_para))).float().to(self.config.device)
 
-        print("[+] start training")
-        # 4: training period
         for epoch in range(n_epochs):
             for i, (X, y) in enumerate(dataloader):
                 step += 1
-                # enable training behavoir of the score-model
+
                 score.train()
-                # tranform the discrete data into a number continues set from [0,1]
                 X = X.to(self.config.device)
                 X = X / 256. * 255. + torch.rand_like(X) / 256.
-                # additionally logit tranformation
                 if logit_transform:
                     X = self.logit_transform(X)
 
-                # model learns on many noise levels at the same tiem
-                labels = torch.randint(0, len(sigmas), (X.shape[0],), device=X.device)
-                if algo == 'dsm':
-                    loss = anneal_dsm_score_estimation(score, X, labels, sigmas, anneal_power)
-                #elif self.config.training.algo == 'ssm':
-                #    loss = anneal_sliced_score_estimation_vr(score, X, labels, sigmas,
-                #                                            n_particles=self.config.training.n_particles)
+                loss = dsm_score_estimation(score, X, sigma=0.01)
 
-                # regular optimizer step
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                # logging current loss
                 tb_logger.add_scalar('loss', loss, global_step=step)
                 logging.info("step: {}, loss: {}".format(step, loss.item()))
 
                 if step >= self.config.training.n_iters:
                     return 0
 
-                # every 100 iterations go into evaluation mode
                 if step % 100 == 0:
                     score.eval()
                     try:
@@ -263,28 +236,28 @@ class Runner():
                     if self.config.data.logit_transform:
                         test_X = self.logit_transform(test_X)
 
-                    test_labels = torch.randint(0, len(sigmas), (test_X.shape[0],), device=test_X.device)
-
                     with torch.no_grad():
-                        test_dsm_loss = anneal_dsm_score_estimation(score, test_X, test_labels, sigmas,anneal_power)
+                        test_dsm_loss = dsm_score_estimation(score, test_X, sigma=0.01)
 
                     tb_logger.add_scalar('test_dsm_loss', test_dsm_loss, global_step=step)
-                
-                # checkpoining -> safe the weights of the network every so and so steps
-                if step % snapshot_freq == 0:
-                    print("[+] save ceckpoint")
+
+                if step % self.config.training.snapshot_freq == 0:
                     states = [
                         score.state_dict(),
                         optimizer.state_dict(),
                     ]
-                    torch.save(states, os.path.join(path, "log", 'checkpoint_{}.pth'.format(step)))
-                    torch.save(states, os.path.join(path, "log", 'checkpoint.pth'))
+                    torch.save(states, os.path.join(self.args.log, 'checkpoint_{}.pth'.format(step)))
+                    torch.save(states, os.path.join(self.args.log, 'checkpoint.pth'))
+
+  
+
+                
   """
   Used to start the sampling process needed for calculating the scores.
   """
   def start_sampling_images(self):
         states = torch.load(os.path.join(path, "log", 'checkpoint.pth'), map_location=self.config.device)
-        score = CondRefineNetDilated(self.config).to(self.config.device)
+        score = RefineNetDilated(self.config).to(self.config.device)
         score = torch.nn.DataParallel(score)
         score.load_state_dict(states[0])
 
@@ -298,54 +271,7 @@ class Runner():
   Suitable for FID / Inception Score evaluation.
   """
   def sample_images(self,scorenet,*,num_samples: int,batch_size: int = 64,n_steps_each: int = 100,step_lr: float = 2e-5,):
-      
-      scorenet.eval()
-      os.makedirs(os.path.join(path, "images"), exist_ok=True)
-
-      # --- build sigma schedule (torch, on device) ---
-      sigmas = torch.tensor(np.exp(np.linspace(
-            np.log(sigma_begin_para),
-            np.log(sigma_end_para),
-            num_classes_para,
-        )),
-        dtype=torch.float32,
-        device=self.config.device)
-
-      size = image_size
-      device = self.config.device
-
-      global_idx = 0
-
-      with torch.no_grad():
-          while global_idx < num_samples:
-            print("[+] current idx :", global_idx)
-            b = min(batch_size, num_samples - global_idx)
-
-            # --- initialize from uniform noise ---
-            x = torch.rand(b, channels, size, size, device=device)
-
-            print("[+] init randomized")
-
-            # --- annealed Langevin dynamics ---
-            for c, sigma in enumerate(sigmas):
-                labels = torch.full((b,), c, device=device, dtype=torch.long)
-                step_size = step_lr * (sigma / sigmas[-1]) ** 2
-
-                for _ in range(n_steps_each):
-                    noise = torch.randn_like(x) * torch.sqrt(step_size * 2)
-                    grad = scorenet(x, labels)
-                    x = x + step_size * grad + noise
-
-            # --- invert logit transform if used during training ---
-            if self.config.data.logit_transform:
-                x = torch.sigmoid(x)
-
-            x = x.clamp(0.0, 1.0)
-
-            # --- save individual images ---
-            for j in range(b):
-                save_image(x[j],os.path.join(path,"images", f"sample_{global_idx:06d}.png"))
-                global_idx += 1
+      return 0
 
 
 if __name__ == "__main__":
