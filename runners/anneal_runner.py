@@ -75,6 +75,7 @@ class AnnealRunner():
 
         # 2: loading the datasets
         if self.config.data.dataset == 'CIFAR10':
+            print("CIFAR Loaded")
             dataset = CIFAR10(os.path.join(self.args.run, 'datasets', 'cifar10'), train=True, download=True,
                               transform=tran_transform)
             test_dataset = CIFAR10(os.path.join(self.args.run, 'datasets', 'cifar10_test'), train=False, download=True,
@@ -269,6 +270,7 @@ class AnnealRunner():
 
         imgs = []
         if self.config.data.dataset == 'MNIST':
+            
             samples = torch.rand(grid_size ** 2, 1, 28, 28, device=self.config.device)
             
             sample = self.anneal_Langevin_dynamics(samples, score, sigmas, 100, 0.00002)[0]
@@ -288,26 +290,24 @@ class AnnealRunner():
                 torch.save(samples[i], os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(i)))
             
 
-
         else:
             samples = torch.rand(grid_size ** 2, 3, 32, 32, device=self.config.device)
 
-            all_samples = self.anneal_Langevin_dynamics(samples, score, sigmas, 100, 0.00002)
+            sample = self.anneal_Langevin_dynamics(samples, score, sigmas, 10, 0.00002)[0]
 
-            for i, sample in enumerate(tqdm.tqdm(all_samples, total=len(all_samples), desc='saving images')):
-                sample = sample.view(grid_size ** 2, self.config.data.channels, self.config.data.image_size,
+            sample = sample.view(grid_size ** 2, self.config.data.channels, self.config.data.image_size,
                                      self.config.data.image_size)
 
-                if self.config.data.logit_transform:
+            if self.config.data.logit_transform:
                     sample = torch.sigmoid(sample)
 
-                image_grid = make_grid(sample, nrow=grid_size)
-                if i % 10 == 0:
-                    im = Image.fromarray(image_grid.mul_(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy())
-                    imgs.append(im)
+            image_grid = make_grid(sample, nrow = grid_size) 
 
-                save_image(sample, os.path.join(self.args.image_folder, 'image_{}.png'.format(i)), nrow=10)
-                torch.save(sample, os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(i)))
+            samples = list(sample)
+
+            for i, akt_sample in enumerate(tqdm.tqdm(samples, total=len(samples), desc='saving images')):
+                save_image(akt_sample, os.path.join(self.args.image_folder, 'image_{}.png'.format(i)), nrow=10)
+                torch.save(akt_sample, os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(i)))
 
         #imgs[0].save(os.path.join(self.args.image_folder, "movie.gif"), save_all=True, append_images=imgs[1:], duration=1, loop=0)
 
