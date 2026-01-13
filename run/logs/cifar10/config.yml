@@ -1,6 +1,6 @@
 !!python/object:argparse.Namespace
 data: !!python/object:argparse.Namespace
-  channels: 1
+  channels: 3
   dataset: CIFAR10
   image_size: 32
   logit_transform: false
