@@ -269,7 +269,11 @@ class AnnealRunner():
         grid_size = 5
 
         imgs = []
-        if self.config.data.dataset == 'MNIST':
+
+        global_index = 0 # global index for naming the images constantly over the loops
+
+        while global_index < self.args.number_of_samples:
+          if self.config.data.dataset == 'MNIST':
             
             samples = torch.rand(grid_size ** 2, 1, 28, 28, device=self.config.device)
             
@@ -286,11 +290,11 @@ class AnnealRunner():
             samples = list(sample)
 
             for i, akt_sample in enumerate(tqdm.tqdm(samples, total=len(samples), desc="saving images")):
-                save_image(samples[i], os.path.join(self.args.image_folder, 'image_{}.png'.format(i)))
-                torch.save(samples[i], os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(i)))
-            
+                save_image(samples[i], os.path.join(self.args.image_folder, 'image_{}.png'.format(global_index)))
+                torch.save(samples[i], os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(global_index)))
+                global_index += 1 # increase global index           
 
-        else:
+          else:
             samples = torch.rand(grid_size ** 2, 3, 32, 32, device=self.config.device)
 
             sample = self.anneal_Langevin_dynamics(samples, score, sigmas, 10, 0.00002)[0]
@@ -306,8 +310,10 @@ class AnnealRunner():
             samples = list(sample)
 
             for i, akt_sample in enumerate(tqdm.tqdm(samples, total=len(samples), desc='saving images')):
-                save_image(akt_sample, os.path.join(self.args.image_folder, 'image_{}.png'.format(i)), nrow=10)
-                torch.save(akt_sample, os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(i)))
+                save_image(akt_sample, os.path.join(self.args.image_folder, 'image_{}.png'.format(global_index)), nrow=10)
+                torch.save(akt_sample, os.path.join(self.args.image_folder, 'image_raw_{}.pth'.format(global_index)))
+                global_index += 1 # 
+
 
         #imgs[0].save(os.path.join(self.args.image_folder, "movie.gif"), save_all=True, append_images=imgs[1:], duration=1, loop=0)
 

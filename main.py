@@ -24,6 +24,7 @@ def parse_args_and_config():
     parser.add_argument('--test', action='store_true', help='Whether to test the model (legacy; equivalent to --mode test)')
     parser.add_argument('--resume_training', action='store_true', help='Whether to resume training')
     parser.add_argument('-o', '--image_folder', type=str, default='images', help="The directory of image outputs")
+    parser.add_argument("--number_of_samples", type=int, default=100, help="Number of samples that are produced for sampling")
 
     # NEW: pipeline mode (keeps --test working too)
     parser.add_argument(
