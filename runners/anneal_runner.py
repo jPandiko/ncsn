@@ -160,7 +160,11 @@ class AnnealRunner():
                 score.train()
                 # tranform the discrete data into a number continues set from [0,1]
                 X = X.to(self.config.device)
-                X = X / 256. * 255. + torch.rand_like(X) / 256.
+                # X = X / 256. * 255. + torch.rand_like(X) / 256.
+                # use gaussian noise for experiments
+                gauss_std = (1.0 / 256.0) / np.sqrt(12.0)
+                X = X / 256. * 255. + torch.randn_like(X) * gauss_std
+                
                 # additionally logit tranformation
                 if self.config.data.logit_transform:
                     X = self.logit_transform(X)
@@ -195,7 +199,11 @@ class AnnealRunner():
                         test_X, test_y = next(test_iter)
 
                     test_X = test_X.to(self.config.device)
-                    test_X = test_X / 256. * 255. + torch.rand_like(test_X) / 256.
+                    # test_X = test_X / 256. * 255. + torch.rand_like(test_X) / 256.
+                    # use gaussian noise instead
+                    gauss_std = (1.0 / 256.0) /np.sqrt(12.0)
+                    test_X = test_X / 256. * 255 + torch.randn_like(test_X) * gauss_std
+                    
                     if self.config.data.logit_transform:
                         test_X = self.logit_transform(test_X)
 
@@ -243,6 +251,7 @@ class AnnealRunner():
                 step_size = step_lr * (sigma / sigmas[-1]) ** 2
                 for s in range(n_steps_each):
                     noise = torch.randn_like(x_mod) * np.sqrt(step_size * 2)
+
                     grad = scorenet(x_mod, labels)
                     x_mod = x_mod + step_size * grad + noise
                     # print("class: {}, step_size: {}, mean {}, max {}".format(c, step_size, grad.abs().mean(),
